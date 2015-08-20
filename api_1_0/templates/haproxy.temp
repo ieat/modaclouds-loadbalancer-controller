@@ -1,6 +1,7 @@
 global
   daemon
   maxconn 4096
+  tune.ssl.default-dh-param 2048
   pidfile {{pid}}
 
 
@@ -9,7 +10,7 @@ defaults
   log 127.0.0.1 local0
   log 127.0.0.1 local1 notice
   mode http
-  timeout connect 300000
+  timeout connect 900000
   timeout client 300000
   timeout server 300000
   maxconn 2000
@@ -27,6 +28,7 @@ defaults
       bind {{e}}
     {%endfor%}
       mode http
+      stats uri /__haproxy/dashboard
       option httpclose
       option forwardfor
       reqadd X-Forwarded-Proto:\ https
@@ -49,6 +51,7 @@ defaults
 {% endfor %}
 
 
-listen haproxyapp_admin:9100 *:9100
+listen stats
   mode http
-  stats uri /status
+  bind *:{{listenPort}}
+  stats uri /__haproxy/dashboard

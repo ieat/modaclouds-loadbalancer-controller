@@ -12,6 +12,33 @@ It is designed to:
 
 It is important to note that it is only an early prototype. No guarantees are given for its use. Furthermore it may be subject to significant changes from version to version.
 
+## Change Log
+* v0.2.8-beta
+  * fixed support for security certificates in gateway endpoints
+  * updated documentation
+
+* v0.2.7-alpha
+  * added resources to upload security certificates
+  * added resources to upload haproxy configuration files
+    * use environmental variables for Enpoint IP, Enpoint port Min and Max, pid.
+    * for futher details see `GET` `/v1/haproxy/variables`
+* v0.2.5-alpha
+ * listen port check implemented
+ * code refactoring
+ * new resource added for dashboard haproxy 
+
+* v0.2-alpha 
+ *The generated haproxy config, pid files as well as the sqlite database is created in the folder denoted by $TMPDIR env varibale
+ * now default ip is set to "0.0.0.0" on port "8088".
+ * renamed default database to default.db instead of test.db
+ * changed haproxy status URI from "/status" to "__haproxy/dashboard"
+
+### Environmental Variables
+
+```
+It uses the $TMPDIR environmental variable to store temporary files for each launched instance.
+```
+
 ## Install
 
 These instructions were tested on Mac OS X Mavericks, openSuse 13.1 and Ubuntu 14.04. The main development machine was running Mac OS.
@@ -29,14 +56,14 @@ Requirements are pretty simple:
 
 
 
+
 In order to clone the repository create or go to a directory of your choosing and type:
 
 ```
 $ git clone https://igabriel@bitbucket.org/igabriel/pyhrapi.git
 
 ```
-
-Or you can use 
+Or you can use
 
 ```
 https://github.com/igabriel85/modaclouds-loadbalancer-controller
@@ -85,12 +112,24 @@ The file `requirements.txt` can be found in the repository and contains a list o
 In order to start pyHrapi we must enter the following command
 
 ```
-(henv)..$ python pyprox.py 179.12.12.1 5000
+(henv)..$ python pyprox.py <ip-address> <port> <db name> 
 
 ```
 
-If no host is given pyHrapi uses localhome on port 5000.
 
+If no host is given pyHrapi uses localhome on port 5000.
+If you want to use the provided virtualenv you can start it using the provided bash script:
+
+```
+...$ ./start-mlbc.sh
+```
+or
+
+```
+...$./start-mlbc.sh <ip-address> <port> <db name> 
+```
+
+It is important to note that because makin virtualenv relocatable is still experimental we have preconfigured environments for MacOS X 10.9 and openSUSE 13.1 (both 32 and 64 bits).
 
 
 ##Usage 
@@ -101,7 +140,7 @@ HaProxy Frontend
 `GET` `/v1/gateways`
 
 a list of identifiers for the defined gateways; (i.e. the response body is a JSON list containing strings;)
-```
+```json
 {
   "Gateways": [
     "gatewayHTTP", 
@@ -116,7 +155,7 @@ a list of identifiers for the defined gateways; (i.e. the response body is a JSO
 
 obtain the definition document for a particular gateway (identified by the token {gateway}); the response body is a <gateway-descriptor>;
 
-```
+```json
 {
   "endpoints": {
     "EndpointFive": "11.0.0.5", 
@@ -143,7 +182,7 @@ obtain the definition document for a particular gateway (identified by the token
 
 create a new gateway (identified by the token {gateway}), or update an existing gateway in case one exists with the given identifier; the request body is a <gateway-descriptor>;
 
-```
+```json
 
 {
   "gateway": "testPut",
@@ -155,8 +194,8 @@ create a new gateway (identified by the token {gateway}), or update an existing 
     },
     "pools":
     {
-    	"poolPutG1": "1.1.1.1:80",
-    	"poolPutG2": "1.1.1.2:80"
+      "poolPutG1": "1.1.1.1:80",
+      "poolPutG2": "1.1.1.2:80"
     },
   "enable": "True"
 }
@@ -166,7 +205,7 @@ create a new gateway (identified by the token {gateway}), or update an existing 
 Currently pool usage in the context of gateways is broken. Thus it can be ommited in the above json when submitting gateways.
 Also it is possible to define the default pool (backend) for a given frontend (gateway).
 
-```
+```json
 {
   "gateway": "testPut",
   "protocol": "http",
@@ -177,8 +216,8 @@ Also it is possible to define the default pool (backend) for a given frontend (g
     },
     "pools":
     {
-    	"poolPutG1": "1.1.1.1:80",
-    	"poolPutG2": "1.1.1.2:80"
+      "poolPutG1": "1.1.1.1:80",
+      "poolPutG2": "1.1.1.2:80"
     },
   "enable": "True",
   "defaultBack":<backend_id>
@@ -196,7 +235,7 @@ Deletes the designated gateway; Currently only deletes gateway (db_hrapy) and no
 `GET` `/v1/gateways/{gateway}/endpoints`
 
 a list of identifiers for all the gateway's endpoints;
-```
+```json
 {
   "Endpoints": [
     "EndpointThree", 
@@ -213,7 +252,7 @@ a list of identifiers for all the gateway's endpoints;
 
 Displays only the address of the endpoint.
 
-```
+```json
 {
   "address": "11.0.0.2:80"
 }
@@ -222,7 +261,7 @@ Displays only the address of the endpoint.
 
 This creates or modifies a given gateway endpoint:
 
-```
+```json
 {
   "address": "12.0.0.22:80"
 }
@@ -237,7 +276,7 @@ This deletes the given endpoint.
 
 A list of aliases for all the associated pools;
 
-```
+```json
 {
   "Pools": [
     "testPool3", 
@@ -274,7 +313,7 @@ HaProxy Backends
 
 Creates a json containing the list of all pools
 
-```
+```json
 {
   "Pools": [
     "testPool1", 
@@ -294,7 +333,7 @@ Creates a json containing the list of all pools
 
 Returns the pool descriptor of a specific pool member.
 
-```
+```json
 {
   "enabled": true, 
   "targets": {
@@ -314,7 +353,7 @@ Returns the pool descriptor of a specific pool member.
 
 Creates or modifies a specific pool member.
 
-```
+```json
 {
   "enabled": true,
   "targets": {
@@ -339,7 +378,7 @@ Deletes a specific pool.
 
 Returns a json containing the list of all target aliases.
 
-```
+```json
 {
   "Targets": [
     "targetFour", 
@@ -358,7 +397,7 @@ Returns a json containing the list of all target aliases.
 
 Returns a json containing a the target associated with a pool.
 
-```
+```json
 {
   "address": "10.0.0.6:80",
   "weight" : 220,
@@ -370,7 +409,7 @@ Returns a json containing a the target associated with a pool.
 
 Creates or modifies a target associated with a pool.
 
-```
+```json
 {
   "address": "10.0.1.6:80",
   "weight": 12, 
@@ -392,7 +431,7 @@ Deletes the target from a specified pool.
 
 Obtain the policy of the designated pool; the response body is either the JSON null value in case no policy exists, or a <policy>;
 As well as its default weight.
-```
+```json
 {
   "policy": "roundrobin", 
   "weights": 1.0
@@ -404,7 +443,7 @@ As well as its default weight.
 
 Updates the policy of the designated pool; (by using the JSON null value the same effect as DELETE is obtained;)
 
-```
+```json
 {
   "policy": "roundrobin", 
   "weights": 2.0
@@ -417,6 +456,32 @@ Reset the policy of the designated pool to a default value;
 
 It is important to note that all names and aliases of gateways, endpoints, targets and pools are considered unique.
 Thus, no duplicate names are allowed. Further more all jsons are case sensitive.
+
+`GET` `/v1/pools/{pool}/targets/{target}/check`
+
+Checks if a target is online or not. If the target is online it returns:
+
+```json
+{   
+    "Target": <target_id>,
+    "Host": <host-ip>,
+    "Port": <port>,
+    "Status": "Online"
+}
+```
+It the target/service is offline it returns:
+
+```json
+{   
+    "Target": <target_id>,
+    "Host": <host-ip>,
+    "Port": <port>,
+    "Status": "Offline"
+}
+```
+
+It is important to note that once a target is determined to be offline it is flagged as disabled and not included into the new configuration file loaded into Haproxy.
+The new configuration is not automatically loaded.
 
 ## Starting Haproxy
 
@@ -441,6 +506,136 @@ Imports an sql database and loads that as the default. The request data is the d
 Currently not implemented. Scheduled for the next version.
    
 
+It is posible as of version v0.2.7-alpha to upload a configuration and pem certificate using REST calls.
+
+In order to upload certificates the content-type has to be application/x-pem-file.
+
+`PUT` `/v1/certificates/<cert>`
+
+The certificats will be saved in the sqlite3 database as well as in $TMPDIR under the name <cert>.pem .
+
+`GET` `/v1/certificates`
+
+This returns a list containing all certificates currently stored:
+
+```json
+
+{
+    "certificates":[<certificate list>]
+}
+
+```
+
+`PUT` `/v1/certificates/<cert>`
+
+A new certificate will be added with the name given in <cert>. The content type should be set to `application/x-pem-file`. If everything is correct the call returns:
+
+```json
+{
+"certificate saved":<cert>.pem
+}
+
+```
+
+`DELETE` `/v1/certificates/<cert>`
+
+In order to delete a certificate we need to specify its name via <cert>.
+
+In order to specify the usage of a certificate we must specify the name of the certificate. This will tell the haproxy what certificate to use for a given gateways endpoint:
+
+`PUT` `/v1/gateways/<gateway>/endpoints/<endpoint>`
+
+```json
+
+{
+    "address": "*:8081 @key.pem"
+}
+
+```
+The `@` symbol denotes the name of the key to be used. If it is left out then the generated config file will not use certificate based authentication.
+
+
+###Note
+
+It is possible to upload a manually created configuration file. However, this is not recommended! It is in very early development phase, it can cause undesired effects.
+
+`POST` `/v1/controller/upload`
+
+This allows a haproxy config file to be uploaded. If there is a running instance of haproxy it will be overwritten if not a new instance will be created. Although this is functional at the moment it is marked for deprecation for the next stable release.
+
+We can also see the current running and pending configuration. When a configuration is commited it is flagged as running and the old configuration is marked as pending.
+
+`GET` `/v1/haproxy/configuration/running`
+
+Displays the current running confuration by name. In order to see the expanded configuration please use:
+
+`GET` `/v1/haproxy/configuration/running/expanded`
+
+The same is true for pennding. Just replace running with pending in the above resource
+
+We can upload and flag a configuration as pending by:
+
+`PUT` `/v1/haproxy/configuration/pending`
+
+The content type should be set to `text/plain` for the uploaded configuration file. This should contain certain variables such as:
+
+```
+global
+   ...
+
+frontend
+
+   bind @{gateway:endpoint:ip}:@{gateway:endpoint:port:0}
+   bind @{gateway:endpoint:ip}:@{gateway:endpoint:port:1} ssl crt
+@{certificates:store}/domain-1.pem
+
+   acl ...
+
+```
+
+
+By accessing the resource at:
+
+`GET` `/v1/haproxy/configuration/variables`
+
+, we get the following JSON containing the variables that are currently set as endpoint IP and port range, as well as the location of the stored certificates:
+
+``` json
+{
+  "gateway:endpoint:ip" : <endpointIP>,
+  "gateway:endpoint:port:min" : <portMin>, 
+  "gateway:endpoint:port:max" : <portMax>, 
+  "certificates:store" : <tmp_loc>
+
+}
+```
+
+In order to start/restart/stop the uploaded certificates we can use:
+
+`POST` `/v1/haproxy/control/<start/restart/stop>`
+
+
+
+
+
+## Artifact repository Integration
+
+The modaclouds-loadbalancer-controller (pyHrapy) is integrated with the Modaclouds [artifact repository](https://github.com/ieat/mosaic-artifact-repository). Using some simple REST calls we can store and retrieve the main sqlite database that stores all relevant information necessary for the loadbalancer setup.
+
+
+`POST` `/v1/controller/backup/<db_name>`
+
+This will back up the current database named <db_name>. It automatically increments the the version after each commit.
+
+`GET` `/v1/controller/restore/<db_name>/<version>`
+
+It restores a specific version (specified by <db_name>) of the database.
+
+The config files have to be manually regenerated each time the database is restored. It will not effect any running instances of Haproxy
+
+
+
+
 
 # Getting Started - Example
 
@@ -448,7 +643,7 @@ First we need to use the virtualenvironment previously created. Once this is don
 
 
 ```
-(henv)..$python pyprox.py <host> <port>
+(henv)..$python pyprox.py <host> <port> <db name>
 
 ```
 
@@ -475,7 +670,7 @@ This json has to be used with the resource `/v1/gateways/gateHTTP` using the `PU
 
 Once this is done we can create the two backends using pool resources:
 
-```
+```json
 {
   "enabled": true,
   "targets": {
@@ -492,7 +687,7 @@ Lets call this pool/backend `eta` and has the URI `/v1/pools/eta`
 
 The second pool/gateway is defined by:
 
-```
+```json
 {
   "enabled": true,
   "targets": {
@@ -508,7 +703,7 @@ Now we can modify the individual weights of each target by accessing the resourc
 
 `/v1/pools/eta/targets/targetS1`
 
-```
+```json
 {
   "address": "12.1.0.5:80", 
   "weight": 200,
@@ -520,11 +715,38 @@ After the weights are adjusted Haproxy can be started with the resourceusing `PO
 
 `/v1/controller/commit`
 
+After a succesfull  
+
+When Haproxy starts pyHrapi responds with:
+
+```json
+{
+    "HaProxy Status": "Started",
+    "Listen Port": "9029"
+}
+
+```
+
+The listenPort refers to Haproxy dashboard which can be accessed at:
+
+```
+<host>:<listenPort>/__haproxy/dashboard
+```
+
+The resource at :
+```
+<host>:<port>/v1/controller/__haproxy/dashboard
+```
+will redirect given a GET request to the dashboard address listed above.
+
+
+
 
 ##Note
 
 In the configuration folder the config file used to start haproxy is stored. This is not necessary, it is only stored in file form for debugging purposes.
-All configurations are stored in the sqlite database.
+All configurations are also stored in the sqlite database. All files are stored into the OS's temporary directory (see: $TMPDIR environmental variable).
+
 
 
 

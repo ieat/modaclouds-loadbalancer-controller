@@ -29,9 +29,14 @@ from flask import url_for
 from flask import render_template
 from flask import Response
 from flask import send_file
+from flask import send_from_directory
 from sqlalchemy import desc
 import jinja2
 import sys
+import socket
+import re
+import urllib2
+import urllib
 
 # import tempfile
 # from shutil import copyfileobj
@@ -45,15 +50,34 @@ import json
 #from flask.ext.moment import Moment
 from datetime import datetime
 from flask.ext.sqlalchemy import SQLAlchemy
-
-
+# generate temporary random named file
+import tempfile
+import random
+# util import
+from lbcutil import checkFile, portScan, checkPID, signalHandler,parsePID,checkConfig,checkOrf
+from werkzeug import secure_filename
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 template_loc = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
-conf_loc = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'configuration')
-pid_loc = os.path.join(os.path.dirname(os.path.abspath(__file__)),'tmp')
-db_file = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+#conf_loc = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'configuration')
+#pid_loc = os.path.join(os.path.dirname(os.path.abspath(__file__)),'tmp')
+host = '0.0.0.0'
+#db_file = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+#secure file upload
+UPLOAD_FOLDER = tempfile.gettempdir()+'/haConfUp'
+ALLOWED_EXTENSIONS = set(['txt','conf'])
 
+
+#idGen = random.randint(0,900)
+randPort = '90'+str(random.randint(10,99))
+
+portGen = portScan(int(randPort))
+
+
+
+
+
+# Need to create temporary file for pid use tempfile
 
 app = Flask('hrapy')
 
@@ -65,10 +89,7 @@ Uncoment if use from flask.ext.moment import Moment
 """
 Data Base Initialization
 """
-
-
-
-app.config['SQLALCHEMY_DATABASE_URI']='sqlite:///'+os.path.join(basedir,'test.db')
+# app.config['SQLALCHEMY_DATABASE_URI']='sqlite:///'+os.path.join(basedir,'test.db')
 app.config['SQLALCHEMY_COMMIT_ON_TEARDOWN'] = True
 
 db = SQLAlchemy(app)
@@ -163,49 +184,34 @@ class db_commit(db.Model):
 	def __rep__(self):
 		return '<db_commit %r>' % self.name
 
-"""
-Sending signal 0 to a pid will raise an OSError exception if the pid is not running, and do nothing otherwise.
-"""
-""" Check For the existence of a unix pid. """
+# create upload confifuration db
+class db_upconf(db.Model):
+	__tablename__='Uploads'
+	id = db.Column(db.Integer, primary_key=True)
+	schema = db.Column(db.String(64), unique=False)
+	method = db.Column(db.String(64), unique=False)
+	pending = db.Column(db.Boolean, unique=False, default = 0)
+	running = db.Column(db.Boolean, unique=False, default = 0) 
+	data=db.Column(db.LargeBinary, unique=False)
+	expanded =db.Column(db.LargeBinary, unique=False)
+	timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-def checkPID(pid):
-	try:
-		os.kill(pid, 0)
-	except OSError:
-		return False
-	else:
-		return True
+	def __rep__(self):
+		return '<db_commit %r>' % self.name
 
+#create certificate db
+class db_certdb(db.Model):
+	__tablename__='Certificates'
+	id = db.Column(db.Integer, primary_key=True)
+	schema = db.Column(db.String(64), unique=False)
+	method = db.Column(db.String(64), unique=False)
+	entity_id = db.Column(db.String(64), unique=True)
+	data=db.Column(db.LargeBinary, unique=False)
+	timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-"""
-Check if orphan haproxy is running at startup
-and kills it 
-"""
-def checkOrf():
-	p = subprocess.Popen(['pgrep','haproxy'], stdout=subprocess.PIPE)
-	out,err=p.communicate()
-	if len(out)==0:
-		pass
-		# print "No haproxy detected."
-		# ha= Process(target=call, args=(('haproxy', '-f', template_loc +'/basic.tmp'), ))
-		# ha.start()
-		# print "Running with PID %s" %ha.pid
+	def __rep__(self):
+		return '<db_commit %r>' % self.name
 
-	else:
-		for item in out.splitlines():
-			print "Killing haproxy at PID %s" %item
-			os.kill(int(item), signal.SIGKILL)
-	
-	 
-
-	#Process(target=call, args=(('pgrep','haproxy'),  )).start()
-	#haPID.append(haChck)
-	#print haPID
-	# if len(haPID)==0:
-	# 	print "Should start HaProxy"
-	# else:
-	# 	haKill = Process(target=call, args=(('pkill','haproxy'), )).start()
-	# 	print "Killed haproxy"
 
 """
 Gateways Resources
@@ -420,12 +426,25 @@ def putEndpoint(gateway, endpoint1):
 	if not request.json or not 'address' in request.json:
 		abort(400)
 
+	certAdr = request.json['address']
+	certificateLocation = ''
+	if '@' in certAdr:
+		lhs,rhs = certAdr.split('@',1)
+		certAdr = '/'.join([tmp_loc,rhs])
+		if os.path.exists(certAdr):
+			certAdr = lhs +" ssl crt " +certAdr
+			pass
+		else:
+			response =jsonify({"certificate error":"no such certificate"})
+			response.status_code = 404
+			return response
+
 	endpointQuery = db_endpoints.query.filter_by(alias=endpoint1).first()
 	if endpointQuery is None:
-		e = db_endpoints(revision = 1, alias = endpoint1, entity_id =request.json['address'], gateway_id = gateway, schema = url_for('putEndpoint', gateway = gateway, endpoint1 = endpoint1), data = request.data )
+		e = db_endpoints(revision = 1, alias = endpoint1, entity_id =certAdr, gateway_id = gateway, schema = url_for('putEndpoint', gateway = gateway, endpoint1 = endpoint1), data = request.data )
 		db.session.add(e)
 		db.session.commit()
-		response = jsonify({"Added Endpoint":endpoint1})
+		response = jsonify({"added endpoint":endpoint1})
 		response.status_code = 200
 		return response
 	else:
@@ -433,7 +452,7 @@ def putEndpoint(gateway, endpoint1):
 		endpointQuery.revision = int(rev) + 1
 		# add code for modification
 		endpointQuery.data = request.data
-		endpointQuery.entity_id = request.json['address']
+		endpointQuery.entity_id = certAdr
 		db.session.add(endpointQuery) 
 		db.session.commit()
 		response = jsonify({'Modified':endpoint1})
@@ -470,6 +489,7 @@ def getPools():
 		response.status_code = 200
 		return response
 	#return "Return Pools"
+
 
 @app.route('/v1/gateways/pools/<pool>' ,methods=['GET'])
 def getPool(pool):
@@ -747,7 +767,7 @@ def getTarget(pool,target):
 		return response
 	else:
 
-		response = jsonify({"Address":qTarget.entity_id,"weight":qTarget.weight,"enabled":qTarget.enabled})
+		response = jsonify({"address":qTarget.entity_id,"weight":qTarget.weight,"enabled":qTarget.enabled})
 		response.status_code = 200
 		return response
 		
@@ -813,8 +833,56 @@ def delTarget(pool,target):
 		response.status_code = 200
 		return response
 	
+'''
+Check if target is online
+'''
 
+@app.route('/v1/pools/<pool>/targets/<target>/check', methods =['GET'])
+def checkTarget(pool,target):
+	if len(target)==0:
+		abort(404)
 
+	qp = db_pool.query.filter_by(name = pool).first()
+	if qp is None:
+		response = jsonify({"No such pool":pool})
+		response.status_code = 404
+		return response
+
+	qTarget = db_target.query.filter_by(alias = target).first()
+	if qTarget is None:
+		response = jsonify({"No such target":target})
+		response.status_code=404
+		return response
+	else:
+		# parse entity_id for host and port
+		entityID = qTarget.entity_id
+		p = '(?P<host>[^:/ ]+).?(?P<port>[0-9]*).*'
+		m = re.search(p,entityID)
+		targetHost =  m.group('host') 
+		targetPort =  m.group('port') 
+		s=socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		s.settimeout(10) #set timeout
+		try:
+			s.connect((targetHost,int(targetPort)))
+			response = jsonify({"Target":qTarget.alias,"Host":targetHost,"Port":targetPort,"Status":"Online"})
+			response.status_code = 200
+			s.close()
+			return response
+			#print "Port 22 reachable"
+		except socket.error as e:
+			response = jsonify({"Target":qTarget.alias,"Host":targetHost,"Port":targetPort,"Status":"Offline"})
+			response.status_code = 500
+			qTarget.enabled = 0
+			db.session.add(qTarget) 
+			db.session.commit()
+			s.close()
+			return response
+			#print "Error on connect: %s" % e
+		
+
+		# response = jsonify({"Address":qTarget.entity_id,"weight":qTarget.weight,"enabled":qTarget.enabled})
+		# response.status_code = 200
+		# return response
 """
 	Controllers
 
@@ -826,7 +894,7 @@ def exportCDB():
 @app.route('/v1/controller/_export-sql', methods=['GET'])
 def exportSQL():
 	try:
-		dbDump = open(basedir+'/test.db','rb')
+		dbDump = open(tmp_loc+'/default.db','rb')
 		
 		return send_file(dbDump,mimetype = 'application/x-sqlite2',as_attachment = True)
 		# dbCon = sqlite3.connect(basedir+'/test.db')
@@ -864,7 +932,7 @@ def importSQL():
 		response.status_code = 400
 		return response
 
-	dbImp =  open(basedir+"/imp.db","w+")
+	dbImp =  open(tmp_loc+"/imp.db","w+")
 	dbImp.write(request.data)
 	dbImp.close()
 
@@ -971,12 +1039,12 @@ def reloadLB():
 
 
 	# removed "default_back":listPool.pop(0) and added "default_back":defDict			
-	tmp = {"conf":dictPT,"default_back":defDict,"pid":pid_loc+"/haproxy-queue.pid","gateway":dictGateway}			
+	tmp = {"conf":dictPT,"default_back":defDict,"pid":tmp_loc+pid_name,"gateway":dictGateway,"listenPort":portGen}			
 	conf = template.render(tmp)
 	
 
 	#conf = render_template('haproxy.conf_template', def_back = 'backendOne', method = 'roundrobin', server_alias = 'backOneA1',server_address ='127.0.0.1:9001' )
-	file =  open(conf_loc+"/haproxy.conf","w+")
+	file =  open(tmp_loc+conf_name,"w+")
 	file.write(conf)
 	file.close()
 
@@ -987,40 +1055,498 @@ def reloadLB():
 	Parse pid file and see if process is still running
 	'''
 	try:
-		pidfile = open(pid_loc+"/haproxy-queue.pid","r").readline()
+		pidfile = open(tmp_loc+pid_name,"r").readline()
 		pidString = pidfile.strip()
 		pid = int(pidString)
 		#pidfile.readline()
 	except IOError: 
-		print "Error: File does not appear to exist."
-		response = jsonify({"PID Error":"File does not exist"})
-		response.status_code =404
-		return response
+		print "File does not exist."
+		#response = jsonify({"PID Error":"File did not exist"})
+		#response.status_code =201
+		bFile = open(tmp_loc+pid_name,'w')
+		bFile.write(str(0))
+		bFile.close()
+		print "Created PID file"
+		pid = 0
+		#return response
+	
+		
+		
 	#finally: - to run regardless of pid file
 	#if pid exists than reload conf
 	if checkPID(pid) == True:
 		#return "Haproxy is running with PID %s" %pid
 		#haproxy -f /etc/haproxy.cfg -p /var/run/haproxy.pid -sf $(cat /var/run/haproxy.pid)
-		Process(target=call, args=(('haproxy', '-f', conf_loc +'/haproxy.conf','-p', pid_loc +'/haproxy-queue.pid','-sf',pidString), )).start()
+		p=Process(target=call, args=(('haproxy', '-f', tmp_loc +conf_name,'-p', tmp_loc +pid_name,'-sf',pidString), ))
+		p.start()
 		#order in desending order the primary key ids and return the biggest one
 		commitQuery = db_commit.query.order_by(desc(db_commit.id)).first()
 		rev=commitQuery.revision
 		commitQuery.revision = int(rev)+1
 		commitQuery.data = conf
-		response = jsonify({"HaProxy Status":"restarted","PID":pid})
+		response = jsonify({"HaProxy Status":"restarted","PID":pid,'Listen Port':portGen})
 		response.status_code = 200
 		return response
 	else:
-		Process(target=call, args=(('haproxy', '-f', conf_loc +'/haproxy.conf'), )).start()
-		response = jsonify({'Haproxy Status':'Started'})
+		p=Process(target=call, args=(('haproxy', '-f', tmp_loc +conf_name), ))
+		p.start()
+		response = jsonify({'Haproxy Status':'Started','Listen Port':portGen})
 		#Query the db and if commit exists increase revision number and change commit name
 		u = db_commit(revision = 1, schema = url_for('reloadLB') ,method = request.method, data = conf)
 		db.session.add(u) 
 		db.session.commit()
 		response.status_code = 200
 		return  response
+
+
+'''
+Redirect to haproxy dashboard 
+'''
+	
+@app.route('/v1/controller/__haproxy/dashboard',methods=['GET'])
+def haproxyDash():
+	#addr = socket.gethostbyname(socket.gethostname())
+	dashURL = 'http://'+host+':'+str(portGen)+'/__haproxy/dashboard'
+	req = urllib2.Request(dashURL)
+	try:
+		urllib2.urlopen(req)
+		#return "URL accesible"
+	except urllib2.URLError as e:
+		response = jsonify({"Dashboard status":"Offline"})
+		response.status_code = 404
+		return response
+
+	return redirect(dashURL)
+
+'''
+Upload haproxy conf file
+'''
+@app.route('/v1/controller/upload',methods=['GET','POST'])
+def uploadConf():
+	if request.method == 'POST':
+		cfile = request.files['test']
+		filename = secure_filename(cfile.filename)
+		cfile.save(os.path.join(tmp_loc,filename))
+		try:
+			confFile = open(tmp_loc+'/'+filename,"r").read()
+		except IOError:
+			return "Whatever"
+		up = db_upconf(revision = 1, schema = url_for('uploadConf') ,method = request.method, data = confFile)
+		db.session.add(up) 
+		db.session.commit()
+	pidStr = str(parsePID(tmp_loc,pid_name))
+	if checkPID(parsePID(tmp_loc,pid_name)) == True:
+		#return "Haproxy is running with PID %s" %pid
+		#haproxy -f /etc/haproxy.cfg -p /var/run/haproxy.pid -sf $(cat /var/run/haproxy.pid)
+		p=Process(target=call, args=(('haproxy', '-f', tmp_loc +confFile,'-p', tmp_loc +pid_name,'-sf',pidStr), ))
+		p.start()
+		#PID needs to be int while for other usages it has to be str
+		response = jsonify({"HaProxy Status":"Overriden","PID":parsePID(tmp_loc,pid_name),'Listen Port':portGen})
+		response.status_code = 200
+		return response
+	else:
+		p=Process(target=call, args=(('haproxy', '-f', tmp_loc +confFile), ))
+		p.start()
+		response = jsonify({'Haproxy Status':'Started','Listen Port':portGen})
+		#Query the db and if commit exists increase revision number and change commit name
+		u = db_upconf(revision = 1, schema = url_for('uploadConf') ,method = request.method, data = confFile)
+		db.session.add(u) 
+		db.session.commit()
+		response.status_code = 200
+		return  response
+
+
+'''
+Non-Generate configfile upload
+'''
+
+
+@app.route('/v1/haproxy/configuration/running',methods=['GET'])
+def configRunning():
+	qr = db_upconf.query.filter_by(running = 1).first()
+	if qr is None:
+		response = jsonify({'error':'no running config'})
+		response.status_code = 404
+		return response
+
+	return qr.data
+	#return 'no variables expanded-> return config file no replace'
+
+@app.route('/v1/haproxy/configuration/running/expanded',methods=['GET'])
+def configRunningExpanded():
+	qer = db_upconf.query.filter_by(running = 1).first()
+	if qer is None:
+		response = jsonify({'error':'no running config'})
+		response.status_code = 404
+		return response
+
+	return qer.expanded
+
+
+@app.route('/v1/haproxy/configuration/pending', methods=['GET','PUT','DELETE'])
+def configPending():
+	if request.method == 'GET':
+		qp = db_upconf.query.filter_by(pending = 1).first()
+		response = qp.data
+		return response
+
+	if request.method == 'PUT':
+		if request.headers['Content-Type'] == 'text/plain':
+			cData = request.data
+			temporaryConf =  open(tmp_loc+'/temporary.conf',"w+")
+			temporaryConf.write(cData)
+			temporaryConf.close()
+			
+
+			endpointIP = os.getenv('MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_IP', '0.0.0.0')
+			portMin = os.getenv('MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MIN','8000')
+			portMax = os.getenv('MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MAX','8080')
+
+
+			inCfg = open(tmp_loc+'/temporary.conf')
+			expandedTemp = open(tmp_loc+'/temporary-expanded.conf', 'w+')	
+
+			nrOfPorts = 0
+			for line in inCfg:
+				if '@{gateway:endpoint:port:' in line:
+					nrOfPorts +=1
+
+			if nrOfPorts > 81:
+					response = jsonify({'error':'exceeded max allowed port range'})
+					response.status_code = 409
+					return response
+
+			inCfg.close()		
+			dictVar = {
+					'@{gateway:endpoint:ip}':endpointIP,
+					'@{certificates:store}':tmp_loc,
+					'@{pid:store}':tmp_loc+'/tmp.pid'
+			}
+
+
+			for n in range(0,nrOfPorts):
+				gatewayEndpointPort = '@{gateway:endpoint:port:'+str(n)+'}'
+				dictVar.update({gatewayEndpointPort:str(8000+n)})
+
+
+			temp = open(tmp_loc+'/temporary.conf')
+			for line in temp:
+				for src, target in dictVar.iteritems():
+					line = line.replace(src, target)
+				expandedTemp.write(line)
+			temp.close()
+			expandedTemp.close()
+
+				
+
+			try:
+				if checkConfig(tmp_loc,'temporary-expanded.conf') == 1:
+					response = jsonify({'error':'invalid configuration'})
+					response.status_code = 400
+					return response
+				chckConf = open(tmp_loc+'/'+'temporary-expanded.conf',"r").read()
+				pendingConf = open(tmp_loc+'/'+'pending.conf','w+')
+				pendingConf.write(chckConf)
+				pendingConf.close()					
+			except IOError:
+				response = jsonify({'error':'os file error'})
+				response.status_code = 500
+				return response
+				
+
+			pendingFinal = open(tmp_loc+'/'+'pending.conf','r').read()
+			#reset the last config to pending 0
+			qpending = db_upconf.query.filter_by(pending = 1).first()
+			if qpending is not None:
+				qpending.pending = 0
+				db.session.add(qpending) 
+				db.session.commit()
+
+			up = db_upconf(pending = 1,running = 0, schema = url_for('configPending') ,method = request.method, data = cData, expanded = pendingFinal)
+			db.session.add(up) 
+			db.session.commit()
+
+			
+			response = jsonify({'updated':'pending'})
+			response.status_code = 200
+			return response	
+			#return "Text Message: " + pendingFinal
+		else:
+			abort(415)
+
+	if request.method == 'DELETE':
+		return 'undo with the old verion (can be the  running verison)'
+
+@app.route('/v1/haproxy/configuration/pending/expanded', methods = ['GET'])
+def configPendingExpanded():
+	qp = db_upconf.query.filter_by(pending = 1).first()
+	if qp is None:
+		response = jsonify({'error':'no pending configuration'})
+		response.status_code = 404
+		return response
+	response = qp.expanded
+	return response
+
+
+@app.route('/v1/haproxy/configuration/commit', methods = ['POST'])
+def configLoad():
+	queryRun = db_upconf.query.filter_by(running = 1).first()
+	
+	
+	queryPen = db_upconf.query.filter_by(pending = 1).first()
+	if queryPen is None:
+		response = jsonify({'exception':'no pending found'})
+		response.status_code = 404
+		return response
+	else:
+		queryPen.pending = 0
+		queryPen.running = 1
+		db.session.add(queryPen)
+		db.session.commit()
+
+	if queryRun is not None:
+		queryRun.running = 0
+		queryRun.pending = 1
+		db.session.add(queryRun) 
+		db.session.commit()
+
+	confData = queryRun.expanded
+	runningConf =  open(tmp_loc+'/running.conf',"w+")
+	runningConf.write(confData)
+	runningConf.close()
+
+	response = jsonify({'status':'pending is now running'})
+	response.status_code = 200
+	return response
 	
 
+@app.route('/v1/haproxy/configuration/variables', methods = ['GET'])
+def getConfigVariables():
+	endpointIP = os.getenv('MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_IP', '0.0.0.0')
+	portMin = os.getenv('MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MIN','8000')
+	portMax = os.getenv('MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MAX','8080')
+	cerLoc = tmp_loc
+
+	response = jsonify({"gateway:endpoint:ip" : endpointIP, #MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_IP
+            "gateway:endpoint:port:min" : portMin, #MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MIN
+            "gateway:endpoint:port:max" : portMax, #MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MAX
+            "certificates:store" : tmp_loc})
+	response.status_code = 200
+	return response
+
+	# dictVar = {
+ #            "gateway:endpoint:ip" : "x.y.z.w", #MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_IP
+ #            "gateway:endpoint:port:min" : 8000, #MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MIN
+ #            "gateway:endpoint:port:max" : 8080, #MODACLOUDS_LOAD_BALANCER_GATEWAY_ENDPOINT_PORT_MAX
+ #            "gateway:endpoint:port:0" : 8000,
+ #            "gateway:endpoint:port:7" : 8007,
+ #            "certificates:store" : "/.../"
+ #        }
+	#return 'return json' + dictVar
+
+
+@app.route('/v1/haproxy/control/start',methods = ['POST'])
+def extHaStart():
+	try:
+		tempPid = open(tmp_loc+'/tmp.pid','r').readline()
+		testPidStrip = tempPid.strip()
+		pidTestInt = int(testPidStrip)
+	except IOError:
+		response = jsonify({'error':'pid temp'})
+		response.status_code = 500
+		return response
+
+	if checkPID(pidTestInt) == True:
+		response = jsonify({'exception':'haproxy already started'})
+		response.status_code = 409
+		return response
+	
+	procStart = subprocess.Popen(['haproxy', '-f', tmp_loc+'/running.conf'])	
+
+	response = jsonify({'haproxy status':'started','pid':procStart.pid})
+	response.status_code = 200
+	return response
+	
+
+@app.route('/v1/haproxy/control/stop',methods = ['POST'])
+def extHaStop():
+	checkOrf()
+	response = jsonify({'status':'haproxy killed'})
+	response.status_code = 200
+	return response
+
+@app.route('/v1/haproxy/control/restart', methods = ['POST'])
+def extHaRestart():
+	try:
+		tempPidRead = open(tmp_loc+'/tmp.pid','r').readline()
+		tempPidReadString = tempPidRead.strip()
+		pidInt = int(tempPidReadString)
+	except IOError:
+		response = jsonify({'error':'pid file not found'})
+		response.status_code = 404
+		return response
+
+	if checkPID(pidInt) == True:
+		procRestart = subprocess.Popen(['haproxy', '-f', tmp_loc+'/running.conf','-p',tmp_loc+'/tmp.pid','sf',tempPidReadString])
+		response = jsonify({'haproxy status':'restarted','pid':procRestart.pid})
+		response.status_code = 200
+		return response
+	else:
+		response = jsonify({'haproxy status':'no haproxy to restart'})
+		response.status_code = 404
+		return response
+
+	
+
+@app.route('/v1/certificates', methods = ['GET'])
+def getCertificates():
+	qcert=db.session.query(db_certdb.entity_id).all()
+	certList = []
+	for c in qcert:
+		certList.append(c.entity_id)
+	response = jsonify({"certificates":certList})
+	response.status_code = 200
+	return response
+
+@app.route('/v1/certificates/<cert>', methods = ['PUT','DELETE'])
+def putCertificate(cert):
+	if request.method  == 'PUT':
+		if request.headers['Content-Type'] == 'application/x-pem-file':
+			pemData = request.data
+			qcertdb = db_certdb.query.filter_by(entity_id=cert).first()
+			if qcertdb is not None:
+				response = jsonify({'duplicate':cert})
+				response.status_code = 406
+				return response
+			crt = db_certdb( entity_id = cert, schema = url_for('putCertificate', cert = cert) ,method = request.method, data = pemData)
+			db.session.add(crt) 
+			db.session.commit()
+
+			try:
+				certPem = open(tmp_loc+'/'+cert+'.pem','w+')
+				certPem.write(pemData)
+				certPem.close()
+			except IOError:
+				response = jsonify({'error':'pem file error'})
+				response.status_code = 500
+				return response	
+	
+		response = jsonify({'certificate saved':cert+'.pem'})
+		response.status_code = 200		
+		return response
+
+	if request.method == 'DELETE':
+		if len(cert)==0:
+			abort(404)
+		delete_cert_id = db_certdb.query.filter_by(entity_id = cert).first()	
+		if delete_cert_id is None:
+			response = jsonify({'no such certificate':cert})
+			response.status_code = 404
+			return response
+		else:
+			db.session.delete(delete_cert_id)
+			db.session.commit()
+			response = jsonify ({'deleted cert':cert})
+			response.status_code = 200
+			return response
+
+
+'''
+Integration with object store and artifact repository
+'''
+
+@app.route('/v1/controller/backup/<db_name>', methods= ['GET','POST','DELETE'])
+def controlBackupDB(db_name):
+	artifactRepoIP = os.getenv('MOSAIC_ARTIFACT_REPOSITORY_ENDPOINT_IP', '172.16.93.132')
+	artifactRepoPort = os.getenv('MOSAIC_ARTIFACT_REPOSITORY_ENDPOINT_PORT', '8888')
+
+	if request.method == 'POST':
+		dbFilePath = tmp_loc+'/'+db_name+'.db'
+		if os.path.isfile(dbFilePath) is True:
+			currentVer = 1
+			createArtifactLoc = artifactRepoIP+':'+artifactRepoPort+'/v1/repositories/mlbc/artifacts/'+db_name
+			
+			checkVersion = subprocess.Popen(['curl','-X','GET', 'http://'+createArtifactLoc],stdout=subprocess.PIPE)
+			artCreate=checkVersion.stdout	
+			respCreate = str(artCreate.read())
+			returnCode = json.loads(respCreate)
+			testCode = returnCode['data']
+			if not testCode:
+				pass
+			else:
+				testCode.sort()
+				lastVer = testCode.pop()
+				currentVer = int(lastVer)+1
+
+			createArtifact = subprocess.Popen(['curl','-X','PUT', 'http://'+createArtifactLoc+'/'+str(currentVer)],stdout=subprocess.PIPE)
+			checkStatusCreate = createArtifact.stdout
+			statusCreate = (checkStatusCreate.read())
+			artifactCodeJ = json.loads(statusCreate)
+			artifactCode = artifactCodeJ['code']
+			if artifactCode == 1:
+				response = jsonify({'error':'while creating artifact version'})
+				response.status_code = 405
+				return response
+
+			sendTo = artifactRepoIP+':'+artifactRepoPort+'/v1/repositories/mlbc/artifacts/'+db_name+'/'+str(currentVer)+'/files/'+db_name+'.db'
+			upDB = subprocess.Popen(['curl', '-i','-L','-X','PUT','-T', tmp_loc+'/'+db_name+'.db', 'http://'+sendTo],stdout=subprocess.PIPE)
+			checkupDBStatus = upDB.stdout
+			# statusUpDB = checkupDBStatus.read()
+			# statusCodeUpDBJ = json.loads(statusUpDB)
+			# statusCodeUpDB = statusCodeUpDBJ['code']
+			# if statusCodeUpDB == 1:
+			# 	response = jsonify({'error':'saving databse'})
+			# 	response.status_code = 501
+			# 	return response
+
+			response = jsonify({'success':'uploaded '+db_name+'.db'})
+			response.status_code = 200
+			return response
+			#return send_from_directory(tmp_loc,db_name+'.db',as_attachment = True)
+		else:
+			dbList = []
+			for dbFile in os.listdir(tmp_loc):
+				if dbFile.endswith(".db"):
+					dbList.append(dbFile)
+			response = jsonify({'error':'wrong name or db not found','db list':dbList})
+			response.status_code = 404
+			return response
+			
+@app.route('/v1/controller/restore/<db_name>/<version>', methods = ['GET'])
+def  restoreDB(db_name,version):
+	# FIXME: to be moved to global position
+	artifactRepoIP = os.getenv('MOSAIC_ARTIFACT_REPOSITORY_ENDPOINT_IP', '172.16.93.132')
+	artifactRepoPort = os.getenv('MOSAIC_ARTIFACT_REPOSITORY_ENDPOINT_PORT', '8888')
+	#curl -X GET http://ENDPOINT_IP:ENDPOINT_PORT/v1/repositories/<repository>/artifacts/<artifact>/<version>/files/<file>
+	#srestore = subprocess.Popen(['curl','-X','GET','http://'+artifactRepoIP+':'+''])
+	arUrl = 'http://'+artifactRepoIP+':'+artifactRepoPort+'/v1/repositories/mlbc/artifacts/'+db_name+'/'+version+'/files/'+db_name+'.db'
+	f = urllib2.urlopen(arUrl)
+	data = f.read()
+	try:
+		with open(tmp_loc+'/'+db_name+'.db', "wb") as restoredDB:
+			restoredDB.write(data)
+			response = jsonify({'success':'restored database'})
+			response.status_code = 200
+			return response
+	except IOError:
+		response = jsonify({'error':'os file restore fail'})
+		response.status_code = 500
+		return response
+
+@app.route('/v1/controller/backup/config', methods = ['GET','POST','DELETE'])
+def controlBackupConf():
+	objecStoreIP = os.getenv('MOSAIC_OBJECT_STORE_ENDPOINT_IP', '0.0.0.0')
+	objectStorePort = os.getenv('MOSAIC_OBJECT_STORE_ENDPOINT_PORT', '9020')
+	if request.method == 'POST':
+		#query last commit and return the data 
+		qComm = db_commit.query.order_by(desc(db_commit.id)).first()
+		return str(qComm.data)
+
+	if request.method == 'GET':
+		return 'get backup config and start it'
+
+	if request.method == 'DELETE':
+		return 'delete last backup ????'
 
 
 """
@@ -1061,6 +1587,12 @@ def meth_not_allowed(e):
 def bad_request(e):
 	response=jsonify({'error':'bad request'})
 	response.status_code=400
+	return response
+
+@app.errorhandler(415)
+def bad_mediatype(e):
+	response=jsonify({'error':'unsupported media type'})
+	response.status_code = 415
 	return response
 
 
@@ -1210,14 +1742,27 @@ def dummy():
 
 
 if __name__ == '__main__':
-	db.create_all()
-	checkOrf()
+	tmp_loc = tempfile.gettempdir()
+	conf_name = checkFile('haproxy','conf',tmp_loc, 1)
+	pid_name = checkFile('haproxy','pid',tmp_loc, 1)
+
 	if len(sys.argv) == 1:
-		app.run(debug = True)
+		app.config['SQLALCHEMY_DATABASE_URI']='sqlite:///'+os.path.join(tmp_loc,'default.db')
+		db.create_all()
+		app.run(host='0.0.0.0', port=8088, debug = True)
+		signal.signal(signal.SIGINT, signalHandler(tmp_loc,pid_name))
+		signal.pause()
 	else:
 		arList = sys.argv
 		host = arList[1]
 		port = int(arList[2])
+		dbname = str(arList[3])
+		app.config['SQLALCHEMY_DATABASE_URI']='sqlite:///'+os.path.join(tmp_loc,dbname+'.db')
+		db.create_all()
 		app.run(host = host, port = port)
+		signal.signal(signal.SIGINT, signalHandler(tmp_loc,pid_name))
+		signal.pause()
+
+	
 		
 	
